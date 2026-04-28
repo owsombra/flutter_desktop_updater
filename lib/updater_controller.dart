@@ -40,6 +40,10 @@ class DesktopUpdaterController extends ChangeNotifier {
   bool _isDownloaded = false;
   bool get isDownloaded => _isDownloaded;
 
+  /// Whether the download failed with an error.
+  bool _hasDownloadError = false;
+  bool get hasDownloadError => _hasDownloadError;
+
   double _downloadProgress = 0;
   double get downloadProgress => _downloadProgress;
 
@@ -95,7 +99,7 @@ class DesktopUpdaterController extends ChangeNotifier {
           )) ??
           0.0;
 
-      // Get changed files liste
+      // Get changed files list
       _changedFiles = versionResponse?.changedFiles;
       _releaseNotes = versionResponse?.changes;
       _appName = versionResponse?.appName;
@@ -112,9 +116,17 @@ class DesktopUpdaterController extends ChangeNotifier {
       throw Exception("Folder URL is not set");
     }
 
-    if (_changedFiles == null && _changedFiles!.isEmpty) {
+    if (_changedFiles == null || _changedFiles!.isEmpty) {
       throw Exception("Changed files are not set");
     }
+
+    // Reset state before starting
+    _hasDownloadError = false;
+    _isDownloading = true;
+    _isDownloaded = false;
+    _downloadProgress = 0;
+    _downloadedSize = 0;
+    notifyListeners();
 
     final stream = await _plugin.updateApp(
       remoteUpdateFolder: _folderUrl!,
@@ -124,28 +136,36 @@ class DesktopUpdaterController extends ChangeNotifier {
     stream.listen(
       (event) {
         _updateProgress = event;
-
-        // if (_downloadProgress >= 1.0) {
-        //   _isDownloading = false;
-        //   _downloadProgress = 1.0;
-        //   _downloadedSize = _downloadSize;
-        //   _isDownloaded = true;
-
-        //   notifyListeners();
-        //   return;
-        // }
-
         _isDownloading = true;
         _isDownloaded = false;
         _downloadProgress = event.receivedBytes / event.totalBytes;
         _downloadedSize = _downloadSize * _downloadProgress;
         notifyListeners();
       },
+      onError: (error) {
+        print("Download error: $error");
+        _hasDownloadError = true;
+        _isDownloading = false;
+        _isDownloaded = false;
+        _downloadProgress = 0;
+        _downloadedSize = 0;
+        notifyListeners();
+      },
       onDone: () {
         _isDownloading = false;
-        _downloadProgress = 1.0;
-        _downloadedSize = _downloadSize;
-        _isDownloaded = true;
+
+        if (_hasDownloadError) {
+          // Do NOT mark as downloaded if there was an error
+          _isDownloaded = false;
+          _downloadProgress = 0;
+          _downloadedSize = 0;
+          print("Download finished with errors. Update will not proceed.");
+        } else {
+          _downloadProgress = 1.0;
+          _downloadedSize = _downloadSize;
+          _isDownloaded = true;
+          print("Download completed successfully.");
+        }
 
         notifyListeners();
       },

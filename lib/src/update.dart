@@ -4,8 +4,10 @@ import "dart:io";
 import "package:desktop_updater/desktop_updater.dart";
 import "package:desktop_updater/src/download.dart";
 
-/// Modified updateAppFunction to return a stream of UpdateProgress.
-/// The stream emits total kilobytes, received kilobytes, and the currently downloading file's name.
+/// Downloads changed files and returns a stream of [UpdateProgress].
+///
+/// If any file download fails, the error is forwarded through the stream
+/// and the incomplete `update/` directory is cleaned up.
 Future<Stream<UpdateProgress>> updateAppFunction({
   required String remoteUpdateFolder,
   required List<FileHashModel?> changes,
@@ -36,8 +38,8 @@ Future<Stream<UpdateProgress>> updateAppFunction({
       var receivedBytes = 0.0;
       final totalFiles = changes.length;
       var completedFiles = 0;
+      var hasError = false;
 
-      // Calculate total length in KB
       final totalLengthKB = changes.fold<double>(
         0,
         (previousValue, element) =>
@@ -55,6 +57,22 @@ Future<Stream<UpdateProgress>> updateAppFunction({
               dir.path,
               (received, total) {
                 receivedBytes += received;
+                if (!responseStream.isClosed) {
+                  responseStream.add(
+                    UpdateProgress(
+                      totalBytes: totalLengthKB,
+                      receivedBytes: receivedBytes,
+                      currentFile: file.filePath,
+                      totalFiles: totalFiles,
+                      completedFiles: completedFiles,
+                    ),
+                  );
+                }
+              },
+            ).then((_) {
+              completedFiles += 1;
+
+              if (!responseStream.isClosed) {
                 responseStream.add(
                   UpdateProgress(
                     totalBytes: totalLengthKB,
@@ -64,22 +82,14 @@ Future<Stream<UpdateProgress>> updateAppFunction({
                     completedFiles: completedFiles,
                   ),
                 );
-              },
-            ).then((_) {
-              completedFiles += 1;
-
-              responseStream.add(
-                UpdateProgress(
-                  totalBytes: totalLengthKB,
-                  receivedBytes: receivedBytes,
-                  currentFile: file.filePath,
-                  totalFiles: totalFiles,
-                  completedFiles: completedFiles,
-                ),
-              );
+              }
               print("Completed: ${file.filePath}");
             }).catchError((error) {
-              responseStream.addError(error);
+              hasError = true;
+              print("Download failed: ${file.filePath} - $error");
+              if (!responseStream.isClosed) {
+                responseStream.addError(error);
+              }
               return null;
             }),
           );
@@ -88,6 +98,18 @@ Future<Stream<UpdateProgress>> updateAppFunction({
 
       unawaited(
         Future.wait(changesFutureList).then((_) async {
+          // If any download failed, clean up the update directory
+          if (hasError) {
+            final updateDir = Directory("${dir.path}/update");
+            if (updateDir.existsSync()) {
+              try {
+                updateDir.deleteSync(recursive: true);
+                print("Cleaned up incomplete update directory.");
+              } catch (e) {
+                print("Failed to clean up update directory: $e");
+              }
+            }
+          }
           await responseStream.close();
         }),
       );
