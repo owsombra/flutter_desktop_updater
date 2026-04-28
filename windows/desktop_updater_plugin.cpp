@@ -49,7 +49,7 @@ namespace desktop_updater
 
   DesktopUpdaterPlugin::~DesktopUpdaterPlugin() {}
 
-  // ── Helpers ───────────────────────────────────────────────
+  // -- Helpers -----------------------------------------------
 
   static std::string wideToUtf8(const std::wstring &wide)
   {
@@ -89,7 +89,7 @@ namespace desktop_updater
     return wideToUtf8(std::wstring(buf));
   }
 
-  /// Returns %APPDATA%\com.draftify\log  (creates if needed)
+  // Returns %APPDATA%\com.draftify\log  (creates if needed)
   static std::string getLogDirectorySafe()
   {
     wchar_t *appdata = nullptr;
@@ -111,7 +111,7 @@ namespace desktop_updater
     return wideToUtf8(logDir);
   }
 
-  // ── Bat file creation ─────────────────────────────────────
+  // -- Bat file creation -------------------------------------
 
   static void createBatFile(const std::string &exeDirStr, const std::string &exePathStr)
   {
@@ -158,7 +158,7 @@ namespace desktop_updater
     std::cout << "Temporary .bat created at: " << batFilePath << std::endl;
   }
 
-  // ── Run bat ───────────────────────────────────────────────
+  // -- Run bat -----------------------------------------------
 
   static void runBatFile(const std::string &exeDirStr)
   {
@@ -183,7 +183,7 @@ namespace desktop_updater
     }
   }
 
-  // ── RestartApp ────────────────────────────────────────────
+  // -- RestartApp --------------------------------------------
 
   void RestartApp()
   {
@@ -201,7 +201,7 @@ namespace desktop_updater
     ExitProcess(0);
   }
 
-  // ── Method call handler ───────────────────────────────────
+  // -- Method call handler -----------------------------------
 
   void DesktopUpdaterPlugin::HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue> &method_call,
