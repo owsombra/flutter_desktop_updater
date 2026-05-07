@@ -235,6 +235,36 @@ class UpdateDialogWidget extends StatelessWidget {
                       ),
                     ],
                   )
+                else if (notifier.hasDownloadError)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          notifier.getLocalization?.downloadErrorText ??
+                              "Download failed. Please check your network connection and try again.",
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        icon: Icon(
+                          Icons.refresh,
+                          color: buttonIconColor,
+                        ),
+                        label: Text(
+                          notifier.getLocalization?.retryText ?? "Retry",
+                          style: TextStyle(
+                            color: buttonTextColor,
+                          ),
+                        ),
+                        onPressed: notifier.downloadUpdate,
+                      ),
+                    ],
+                  )
                 else if (notifier.isDownloading == false &&
                     (notifier.isDownloaded))
                   Row(

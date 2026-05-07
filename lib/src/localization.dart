@@ -8,6 +8,8 @@
 /// - restartWarningText
 /// - warningCancelText
 /// - warningConfirmText
+/// - downloadErrorText
+/// - retryText
 class DesktopUpdateLocalization {
   /// constructor
   const DesktopUpdateLocalization({
@@ -21,6 +23,8 @@ class DesktopUpdateLocalization {
     this.warningConfirmText,
     this.skipThisVersionText,
     this.downloadText,
+    this.downloadErrorText,
+    this.retryText,
   });
 
   /// Default: "Update available"
@@ -56,6 +60,12 @@ class DesktopUpdateLocalization {
 
   /// Default: "Download"
   final String? downloadText;
+
+  /// Default: "Download failed. Please check your network connection and try again."
+  final String? downloadErrorText;
+
+  /// Default: "Retry"
+  final String? retryText;
 }
 
 String? getLocalizedString(String? key, List<dynamic> args) {

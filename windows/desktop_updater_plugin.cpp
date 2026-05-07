@@ -3,10 +3,11 @@
 // This must be included before many other Windows headers.
 #include <windows.h>
 #include <VersionHelpers.h>
-#include <Shlwapi.h> // Include Shlwapi.h for PathFileExistsW
+#include <Shlwapi.h>
+#include <ShlObj.h>
 
-#pragma comment(lib, "Version.lib") // Link with Version.lib
-#pragma comment(lib, "Shlwapi.lib") // Link with Shlwapi.lib
+#pragma comment(lib, "Version.lib")
+#pragma comment(lib, "Shlwapi.lib")
 
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
@@ -18,6 +19,7 @@
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
+#include <vector>
 
 namespace fs = std::filesystem;
 namespace desktop_updater
@@ -47,104 +49,159 @@ namespace desktop_updater
 
   DesktopUpdaterPlugin::~DesktopUpdaterPlugin() {}
 
-  // Modify the createBatFile function to accept parameters and use them in the bat script
-  void createBatFile(const std::wstring &updateDir, const std::wstring &destDir, const wchar_t *executable_path)
+  // -- Helpers -----------------------------------------------
+
+  static std::string wideToUtf8(const std::wstring &wide)
   {
-    // Convert wide strings to regular strings using Windows API for proper conversion
-    int updateSize = WideCharToMultiByte(CP_UTF8, 0, updateDir.c_str(), -1, NULL, 0, NULL, NULL);
-    std::string updateDirStr(updateSize, 0);
-    WideCharToMultiByte(CP_UTF8, 0, updateDir.c_str(), -1, &updateDirStr[0], updateSize, NULL, NULL);
-    updateDirStr.pop_back(); // Remove null terminator
+    if (wide.empty())
+      return std::string();
+    int n = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, NULL, 0, NULL, NULL);
+    std::string out(n - 1, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, &out[0], n - 1, NULL, NULL);
+    return out;
+  }
 
-    int destSize = WideCharToMultiByte(CP_UTF8, 0, destDir.c_str(), -1, NULL, 0, NULL, NULL);
-    std::string destDirStr(destSize, 0);
-    WideCharToMultiByte(CP_UTF8, 0, destDir.c_str(), -1, &destDirStr[0], destSize, NULL, NULL);
-    destDirStr.pop_back(); // Remove null terminator
+  static std::wstring utf8ToWide(const std::string &utf8)
+  {
+    if (utf8.empty())
+      return std::wstring();
+    int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, NULL, 0);
+    std::wstring out(n - 1, 0);
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &out[0], n - 1);
+    return out;
+  }
 
-    int exePathSize = WideCharToMultiByte(CP_UTF8, 0, executable_path, -1, NULL, 0, NULL, NULL);
-    std::string exePathStr(exePathSize, 0);
-    WideCharToMultiByte(CP_UTF8, 0, executable_path, -1, &exePathStr[0], exePathSize, NULL, NULL);
-    exePathStr.pop_back(); // Remove null terminator
+  static std::string getExeDirectoryUtf8()
+  {
+    wchar_t buf[MAX_PATH];
+    GetModuleFileNameW(NULL, buf, MAX_PATH);
+    std::wstring dir(buf);
+    size_t pos = dir.find_last_of(L"\\");
+    if (pos != std::wstring::npos)
+      dir = dir.substr(0, pos);
+    return wideToUtf8(dir);
+  }
+
+  static std::string getExePathUtf8()
+  {
+    wchar_t buf[MAX_PATH];
+    GetModuleFileNameW(NULL, buf, MAX_PATH);
+    return wideToUtf8(std::wstring(buf));
+  }
+
+  // Returns %APPDATA%\com.draftify\log  (creates if needed)
+  static std::string getLogDirectorySafe()
+  {
+    wchar_t *appdata = nullptr;
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, NULL, &appdata);
+    if (FAILED(hr) || appdata == nullptr)
+    {
+      // Fallback to exe directory
+      return getExeDirectoryUtf8();
+    }
+    std::wstring base(appdata);
+    CoTaskMemFree(appdata);
+
+    std::wstring comDraftify = base + L"\\com.draftify";
+    CreateDirectoryW(comDraftify.c_str(), NULL);
+
+    std::wstring logDir = comDraftify + L"\\log";
+    CreateDirectoryW(logDir.c_str(), NULL);
+
+    return wideToUtf8(logDir);
+  }
+
+  // -- Bat file creation -------------------------------------
+
+  static void createBatFile(const std::string &exeDirStr, const std::string &exePathStr)
+  {
+    const std::string updateDir = exeDirStr + "\\update";
+    const std::string destDir = exeDirStr;
+    const std::string logDir = getLogDirectorySafe();
+    const std::string logFile = logDir + "\\update_log.txt";
+    const std::string batFilePath = exeDirStr + "\\update_script.bat";
 
     const std::string batScript =
         "@echo off\n"
         "chcp 65001 > NUL\n"
-        // "echo Updating the application...\n"
+        "echo [%date% %time%] Update script started > \"" + logFile + "\"\n"
+        "echo [%date% %time%] CWD: %cd% >> \"" + logFile + "\"\n"
+        "echo [%date% %time%] Update dir: " + updateDir + " >> \"" + logFile + "\"\n"
+        "echo [%date% %time%] Dest dir: " + destDir + " >> \"" + logFile + "\"\n"
+        "echo [%date% %time%] Exe path: " + exePathStr + " >> \"" + logFile + "\"\n"
+        "echo [%date% %time%] Waiting 4 seconds for app to exit... >> \"" + logFile + "\"\n"
         "timeout /t 4 /nobreak > NUL\n"
-        // "echo Copying files...\n"
-        "xcopy /E /I /Y \"" +
-        updateDirStr + "\\*\" \"" + destDirStr + "\\\"\n"
-                                                 "rmdir /S /Q \"" +
-        updateDirStr + "\"\n" +
-        // "echo Files copied.\n"
+        "if not exist \"" + updateDir + "\" (\n"
+        "  echo [%date% %time%] ERROR: Update directory does not exist! >> \"" + logFile + "\"\n"
+        "  goto :restart\n"
+        ")\n"
+        "echo [%date% %time%] Files in update directory: >> \"" + logFile + "\"\n"
+        "dir /S /B \"" + updateDir + "\" >> \"" + logFile + "\" 2>&1\n"
+        "echo [%date% %time%] Starting xcopy... >> \"" + logFile + "\"\n"
+        "xcopy /E /I /Y \"" + updateDir + "\\*\" \"" + destDir + "\\\" >> \"" + logFile + "\" 2>&1\n"
+        "echo [%date% %time%] xcopy exit code: %errorlevel% >> \"" + logFile + "\"\n"
+        "echo [%date% %time%] Removing update directory... >> \"" + logFile + "\"\n"
+        "rmdir /S /Q \"" + updateDir + "\" >> \"" + logFile + "\" 2>&1\n"
+        "echo [%date% %time%] rmdir exit code: %errorlevel% >> \"" + logFile + "\"\n"
+        ":restart\n"
+        "echo [%date% %time%] Starting application... >> \"" + logFile + "\"\n"
         "timeout /t 3 /nobreak > NUL\n"
-        "start \"\" \"" +
-        exePathStr + "\"\n"
-                     "timeout /t 2 /nobreak > NUL\n"
-                     // "echo Deleting temporary files...\n"
-                     "del update_script.bat\n"
-                     "\"\n"
-                     "exit\n";
+        "start \"\" \"" + exePathStr + "\"\n"
+        "echo [%date% %time%] Update script finished >> \"" + logFile + "\"\n"
+        "timeout /t 2 /nobreak > NUL\n"
+        "del \"" + batFilePath + "\"\n"
+        "exit\n";
 
-    std::ofstream batFile("update_script.bat");
+    std::ofstream batFile(batFilePath);
     batFile << batScript;
     batFile.close();
-    std::cout << "Temporary .bat created.\n";
+    std::cout << "Temporary .bat created at: " << batFilePath << std::endl;
   }
 
-  void runBatFile()
+  // -- Run bat -----------------------------------------------
+
+  static void runBatFile(const std::string &exeDirStr)
   {
-    STARTUPINFO si = {sizeof(si)};
+    std::string batPath = exeDirStr + "\\update_script.bat";
+    std::wstring cmd = L"cmd.exe /c \"" + utf8ToWide(batPath) + L"\"";
+
+    std::vector<wchar_t> cmdBuf(cmd.begin(), cmd.end());
+    cmdBuf.push_back(L'\0');
+
+    STARTUPINFOW si = {sizeof(si)};
     PROCESS_INFORMATION pi;
 
-    WCHAR cmdLine[] = L"cmd.exe /c update_script.bat";
-    if (CreateProcess(
-            NULL,
-            cmdLine,
-            NULL,
-            NULL,
-            FALSE,
-            CREATE_NO_WINDOW,
-            NULL,
-            NULL,
-            &si,
-            &pi))
+    if (CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, FALSE,
+                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
     {
       CloseHandle(pi.hProcess);
       CloseHandle(pi.hThread);
     }
     else
     {
-      std::cout << "Failed to run the .bat file.\n";
+      std::cout << "Failed to run the .bat file. Error: " << GetLastError() << std::endl;
     }
   }
+
+  // -- RestartApp --------------------------------------------
 
   void RestartApp()
   {
     printf("Restarting the application...\n");
-    // Get the current executable file path
-    char szFilePath[MAX_PATH];
-    GetModuleFileNameA(NULL, szFilePath, MAX_PATH);
 
-    // Child process
-    wchar_t executable_path[MAX_PATH];
-    GetModuleFileNameW(NULL, executable_path, MAX_PATH);
+    std::string exeDirStr = getExeDirectoryUtf8();
+    std::string exePathStr = getExePathUtf8();
 
-    printf("Executable path: %ls\n", executable_path);
+    printf("Executable path: %s\n", exePathStr.c_str());
+    printf("Executable dir:  %s\n", exeDirStr.c_str());
 
-    // Replace the existing copyDirectory lambda with copyAndReplaceFiles function
-    std::wstring updateDir = L"update";
-    std::wstring destDir = L".";
+    createBatFile(exeDirStr, exePathStr);
+    runBatFile(exeDirStr);
 
-    // Update createBatFile call with parameters
-    createBatFile(updateDir, destDir, executable_path);
-
-    // 3. .bat dosyasını çalıştır
-    runBatFile();
-
-    // Exit the current process
     ExitProcess(0);
   }
+
+  // -- Method call handler -----------------------------------
 
   void DesktopUpdaterPlugin::HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue> &method_call,
@@ -175,19 +232,10 @@ namespace desktop_updater
     }
     else if (method_call.method_name().compare("getExecutablePath") == 0)
     {
-      wchar_t executable_path[MAX_PATH];
-      GetModuleFileNameW(NULL, executable_path, MAX_PATH);
-
-      // Convert wchar_t to std::string (UTF-8)
-      int size_needed = WideCharToMultiByte(CP_UTF8, 0, executable_path, -1, NULL, 0, NULL, NULL);
-      std::string executablePathStr(size_needed, 0);
-      WideCharToMultiByte(CP_UTF8, 0, executable_path, -1, &executablePathStr[0], size_needed, NULL, NULL);
-
-      result->Success(flutter::EncodableValue(executablePathStr));
+      result->Success(flutter::EncodableValue(getExePathUtf8()));
     }
     else if (method_call.method_name().compare("getCurrentVersion") == 0)
     {
-      // Get only bundle version, Product version 1.0.0+2, should return 2
       wchar_t exePath[MAX_PATH];
       GetModuleFileNameW(NULL, exePath, MAX_PATH);
 
@@ -208,7 +256,6 @@ namespace desktop_updater
         return;
       }
 
-      // Retrieve translation information
       struct LANGANDCODEPAGE
       {
         WORD wLanguage;
@@ -224,7 +271,6 @@ namespace desktop_updater
         return;
       }
 
-      // Build the query string using the first translation
       wchar_t subBlock[50];
       swprintf(subBlock, 50, L"\\StringFileInfo\\%04x%04x\\ProductVersion",
                lpTranslate[0].wLanguage, lpTranslate[0].wCodePage);
@@ -240,16 +286,8 @@ namespace desktop_updater
       if (plusPos != std::wstring::npos && plusPos + 1 < productVersion.length())
       {
         std::wstring buildNumber = productVersion.substr(plusPos + 1);
-
-        // Trim any trailing spaces
         buildNumber.erase(buildNumber.find_last_not_of(L' ') + 1);
-
-        // Convert wchar_t to std::string (UTF-8)
-        int size_needed = WideCharToMultiByte(CP_UTF8, 0, buildNumber.c_str(), -1, NULL, 0, NULL, NULL);
-        std::string buildNumberStr(size_needed - 1, 0); // Exclude null terminator
-        WideCharToMultiByte(CP_UTF8, 0, buildNumber.c_str(), -1, &buildNumberStr[0], size_needed - 1, NULL, NULL);
-
-        result->Success(flutter::EncodableValue(buildNumberStr));
+        result->Success(flutter::EncodableValue(wideToUtf8(buildNumber)));
       }
       else
       {
