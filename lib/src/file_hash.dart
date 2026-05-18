@@ -104,8 +104,14 @@ Future<String> genFileHashes({String? path}) async {
     // ignore: prefer_final_locals
     var hashList = <FileHashModel>[];
 
+    final updateDirPath = "${dir.path}${Platform.pathSeparator}update";
+
     // Dizin içindeki tüm dosyaları döngüyle okuyoruz
     await for (final entity in dir.list(recursive: true, followLinks: false)) {
+      // Skip the temporary update directory
+      if (entity.path.startsWith(updateDirPath)) {
+        continue;
+      }
       if (entity is File) {
         // Dosyanın hash'ini al
         final hash = await getFileHash(entity);
